@@ -1,4 +1,5 @@
 ﻿using EveriseLabsProfitCalc;
+using System.Diagnostics;
 using System.Globalization;
 
 string projectRoot = Directory.GetParent(AppDomain.CurrentDomain.BaseDirectory).Parent.Parent.Parent.FullName;
@@ -23,9 +24,13 @@ if (!DateTime.TryParseExact(Console.ReadLine(), "yyyy-MM-dd", CultureInfo.Invari
 }
 
 List<Trades> trades = ReadTradesFromCsv(filePath);
-foreach (var trade in trades)
+Dictionary<string, decimal> profitLoss = CalculateProfitLoss(trades, client, targetDate);
+
+Console.WriteLine($"Profit/Loss for {client} on {targetDate:yyyy-MM-dd}");
+Console.WriteLine("-------------------------------------");
+foreach (var entry in profitLoss)
 {
-    Console.WriteLine($"{trade.TradeId}, {trade.Type}, {trade.Date:yyyy-MM-dd}, {trade.Client}, {trade.Security}, {trade.Amount}, {trade.Price:C}, {trade.Fee:C}");
+    Console.WriteLine($"{entry.Key}: {entry.Value:C}");
 }
 
 static List<Trades> ReadTradesFromCsv(string filePath)
@@ -51,4 +56,48 @@ static List<Trades> ReadTradesFromCsv(string filePath)
         trades.Add(trade);
     }
     return trades;
+}
+
+static Dictionary<string, decimal> CalculateProfitLoss(List<Trades> trades, string client, DateTime targetDate)
+{
+    var filteredTrades = trades.Where(t => t.Client == client && t.Date <= targetDate)
+                               .OrderBy(t => t.Date)
+                               .ToList();
+
+    var securityHoldings = new Dictionary<string, Queue<(int Amount, decimal Cost)>>();
+    var profitLoss = new Dictionary<string, decimal>();
+
+    foreach (var trade in filteredTrades)
+    {
+        if (!profitLoss.ContainsKey(trade.Security))
+            profitLoss[trade.Security] = 0m;
+
+        if (trade.Type == "BUY")
+        {
+            decimal cost = (trade.Price * trade.Amount) + trade.Fee;
+            if (!securityHoldings.ContainsKey(trade.Security))
+                securityHoldings[trade.Security] = new Queue<(int, decimal)>();
+            securityHoldings[trade.Security].Enqueue((trade.Amount, cost / trade.Amount));
+        }
+        else if (trade.Type == "SELL")
+        {
+            int amountToSell = trade.Amount;
+            decimal revenue = (trade.Price * trade.Amount) - trade.Fee;
+            decimal costOfSold = 0m;
+
+            while (amountToSell > 0 && securityHoldings.ContainsKey(trade.Security) && securityHoldings[trade.Security].Count > 0)
+            {
+                var (availableAmount, unitCost) = securityHoldings[trade.Security].Dequeue();
+                int usedAmount = Math.Min(availableAmount, amountToSell);
+                costOfSold += usedAmount * unitCost;
+                amountToSell -= usedAmount;
+                if (availableAmount > usedAmount)
+                    securityHoldings[trade.Security].Enqueue((availableAmount - usedAmount, unitCost));
+            }
+
+            profitLoss[trade.Security] += revenue - costOfSold;
+        }
+    }
+
+    return profitLoss;
 }
